@@ -1,0 +1,7 @@
+{
+  "name": "ht-autoscaler",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "start": "node src/index.js" },
+  "dependencies": { "dockerode": "^4.0.2", "pg": "^8.12.0" }
+}

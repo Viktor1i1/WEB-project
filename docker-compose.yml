@@ -1,0 +1,110 @@
+name: heavy-tasks
+services:
+
+  certgen:
+    image: alpine:3.20
+    volumes: [certs:/certs]
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -f /certs/server.crt ]; then
+          apk add --no-cache openssl
+          openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+            -keyout /certs/server.key -out /certs/server.crt \
+            -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+        fi
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: heavy
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-heavy_pass}
+      POSTGRES_DB: heavy
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U heavy -d heavy"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api1: &api
+    build: ./api
+    environment: &api-env
+      INSTANCE_NAME: api1
+      DATABASE_URL: postgres://heavy:${DB_PASSWORD:-heavy_pass}@postgres:5432/heavy
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+      MAX_TASK_SECONDS: ${MAX_TASK_SECONDS:-600}
+      MIN_WORKERS: 2
+      MAX_WORKERS: ${MAX_WORKERS:-6}
+    depends_on:
+      postgres: { condition: service_healthy }
+  api2:
+    <<: *api
+    environment:
+      <<: *api-env
+      INSTANCE_NAME: api2
+
+  worker1: &worker
+    build: ./worker
+    image: heavy-tasks-worker:latest
+    labels:
+      heavy-tasks.role: worker
+    environment: &worker-env
+      WORKER_ID: worker1
+      DATABASE_URL: postgres://heavy:${DB_PASSWORD:-heavy_pass}@postgres:5432/heavy
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      MAX_TASK_SECONDS: ${MAX_TASK_SECONDS:-600}
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+  worker2:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker2
+
+  autoscaler:
+    build: ./autoscaler
+    environment:
+      DATABASE_URL: postgres://heavy:${DB_PASSWORD:-heavy_pass}@postgres:5432/heavy
+      MAX_WORKERS: ${MAX_WORKERS:-6}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      MAX_TASK_SECONDS: ${MAX_TASK_SECONDS:-600}
+      WORKER_IMAGE: heavy-tasks-worker:latest
+      DOCKER_NETWORK: heavy-tasks-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres: { condition: service_healthy }
+      worker1: { condition: service_started }
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - certs:/certs:ro
+    depends_on:
+      certgen: { condition: service_completed_successfully }
+      api1: { condition: service_started }
+      api2: { condition: service_started }
+      frontend: { condition: service_started }
+
+networks:
+  default:
+    name: heavy-tasks-net
+
+volumes:
+  pgdata:
+  certs:
