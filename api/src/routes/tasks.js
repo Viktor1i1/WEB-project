@@ -13,7 +13,6 @@ async function loadTask(id) {
   return rows[0];
 }
 
-// Історія задач користувача + стан системи (пункт 3 і 6).
 router.get('/', ah(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT ${TASK_COLS} FROM tasks WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`,
@@ -23,22 +22,18 @@ router.get('/', ah(async (req, res) => {
   res.json({ tasks: rows.map((t) => decorate(t, snap)), system: systemSummary(snap) });
 }));
 
-// Стан однієї задачі (клієнт опитує цей маршрут, щоб оновлювати прогрес-бар).
 router.get('/:id', ah(async (req, res) => {
   const t = await loadTask(Number(req.params.id) || 0);
   if (!t || (t.user_id !== req.user.id && !isAdmin(req))) return res.status(404).json({ error: 'Задачу не знайдено' });
   res.json(decorate(t, await getSnapshot()));
 }));
 
-// Створення задачі: валідація -> ліміти -> запис у БД зі статусом "queued".
 router.post('/', ah(async (req, res) => {
   const { type, params } = req.body || {};
   const v = validateTask(type, params);
   if (v.error) return res.status(400).json({ error: v.error });
 
   const est = await estimateDuration(type, v.units);
-  // Пункт 1: відмова у виконанні, якщо орієнтовний час більший за ліміт.
-  // (Якщо оцінка помилилась, worker однаково зупинить задачу після ліміту часу.)
   if (est > LIMITS.maxTaskSeconds * 1000) {
     return res.status(400).json({
       error: `Задача надто трудомістка: орієнтовний час ~${Math.round(est / 1000)} с, а ліміт ${LIMITS.maxTaskSeconds} с. Зменшіть параметри.`,
@@ -48,7 +43,6 @@ router.post('/', ah(async (req, res) => {
   let id;
   try {
     await client.query('BEGIN');
-    // Блокування на рівні користувача, щоб паралельні запити не обійшли ліміти.
     await client.query('SELECT pg_advisory_xact_lock($1)', [req.user.id]);
 
     const c = await client.query(
@@ -88,8 +82,6 @@ router.post('/', ah(async (req, res) => {
   res.status(201).json(decorate(await loadTask(id), await getSnapshot()));
 }));
 
-// Скасування (пункт 3). queued -> одразу cancelled.
-// running -> ставимо прапорець cancel_requested, worker побачить його і зупинить обчислення.
 router.post('/:id/cancel', ah(async (req, res) => {
   const id = Number(req.params.id) || 0;
   const t = await loadTask(id);

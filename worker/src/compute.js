@@ -1,13 +1,7 @@
-// ============================================================================
-// Обчислення виконуються в ОКРЕМОМУ потоці (worker_threads), щоб важкий цикл
-// не блокував основний потік worker-а (heartbeat, оновлення БД, скасування).
-// Основний потік може в будь-який момент зупинити цей потік через terminate().
-// ============================================================================
 import { parentPort, workerData } from 'node:worker_threads';
 
 const { type, params } = workerData;
 
-// Відправляємо прогрес (відсотки) основному потоку з кроком 0.5%.
 let lastReported = -1;
 function report(pct) {
   const v = Math.floor(Math.min(pct, 99.5) * 2) / 2;
@@ -17,7 +11,6 @@ function report(pct) {
   }
 }
 
-// Простий детермінований генератор випадкових чисел (результати відтворювані).
 function mulberry32(seed) {
   let a = seed;
   return () => {
@@ -28,14 +21,10 @@ function mulberry32(seed) {
   };
 }
 
-// ---------- 1. Система лінійних рівнянь: метод Гауса з вибором головного елемента ----------
-// Генератор рядків матриці: однаковий seed дає ту саму матрицю, тож для перевірки
-// нев'язки матрицю не треба зберігати вдруге (економія пам'яті при великих N).
 function matrixRows(n) {
   const rand = mulberry32(12345);
   const xTrue = new Float64Array(n);
   for (let i = 0; i < n; i++) xTrue[i] = rand() * 10 - 5;
-  // Діагонально домінантна матриця — гарантовано розв'язувана і стійка.
   const nextRow = (row) => {
     let rowSum = 0;
     for (let j = 0; j < n; j++) {
@@ -43,7 +32,7 @@ function matrixRows(n) {
       row[j] = v;
       rowSum += Math.abs(v);
     }
-    return rowSum + 1; // значення діагонального елемента
+    return rowSum + 1;
   };
   return { xTrue, nextRow };
 }
@@ -61,9 +50,8 @@ function linearSystem({ n }) {
     for (let j = 0; j < n; j++) s += A[i * n + j] * xTrue[j];
     b[i] = s;
   }
-  const b0 = Float64Array.from(b); // копія правої частини для обчислення нев'язки
+  const b0 = Float64Array.from(b);
 
-  // Прямий хід. Крок k коштує ~ (n-k)^2 операцій, тому прогрес рахуємо за кумулятивною вартістю.
   for (let k = 0; k < n - 1; k++) {
     let p = k;
     let max = Math.abs(A[k * n + k]);
@@ -89,7 +77,6 @@ function linearSystem({ n }) {
     report(98 * (1 - ((n - k - 1) / n) ** 3));
   }
 
-  // Зворотний хід
   const x = new Float64Array(n);
   for (let i = n - 1; i >= 0; i--) {
     let s = b[i];
@@ -97,8 +84,6 @@ function linearSystem({ n }) {
     x[i] = s / A[i * n + i];
   }
 
-  // Перевірка: похибка відносно точного розв'язку і нев'язка ||A·x − b||
-  // (рядки вихідної матриці генеруються заново тим самим генератором).
   const gen = matrixRows(n);
   const row = new Float64Array(n);
   let maxErr = 0;
@@ -118,17 +103,15 @@ function linearSystem({ n }) {
   };
 }
 
-// ---------- 2. Цикл із пошуком кореня з 2 (імітація навантаження на процесор) ----------
 function sqrtLoop({ iterations }) {
-  // Ітерацій може бути більше за 2^31, тому цикл іде блоками (лічильник у блоці — мале ціле).
-  const BLOCK = 1 << 20; // кратне 4, тож (j & 3) дає ту саму послідовність, що й (i & 3)
+  const BLOCK = 1 << 20; 
   let acc = 0;
   let last = 0;
   for (let base = 0; base < iterations; base += BLOCK) {
     const end = Math.min(BLOCK, iterations - base);
     for (let j = 0; j < end; j++) {
-      let x = 1 + (j & 3) * 0.25; // різні початкові значення, щоб цикл не оптимізувався
-      for (let s = 0; s < 20; s++) x = 0.5 * (x + 2 / x); // метод Ньютона для sqrt(2)
+      let x = 1 + (j & 3) * 0.25; 
+      for (let s = 0; s < 20; s++) x = 0.5 * (x + 2 / x);
       acc += x;
       last = x;
     }
@@ -143,13 +126,11 @@ function sqrtLoop({ iterations }) {
   };
 }
 
-// ---------- 3. Чисельне інтегрування: формула Сімпсона ----------
 const FUNCS = {
   sin: Math.sin,
   x_sin_x: (x) => x * Math.sin(x),
   exp_neg_x2: (x) => Math.exp(-x * x),
 };
-// Точні значення (де відомі) — для порівняння
 const EXACT = {
   sin: (a, b) => Math.cos(a) - Math.cos(b),
   x_sin_x: (a, b) => Math.sin(b) - b * Math.cos(b) - (Math.sin(a) - a * Math.cos(a)),
@@ -159,9 +140,7 @@ const EXACT = {
 function integral({ func, a, b, steps }) {
   const f = FUNCS[func];
   const h = (b - a) / steps;
-  // Кроків може бути більше за 2^31, тому цикл іде блоками: лічильник усередині блоку
-  // лишається малим цілим числом (так швидше), а прогрес звітуємо після кожного блоку.
-  const BLOCK = 1 << 20; // парне, тож парність індексу = парність j
+  const BLOCK = 1 << 20; 
   let sum = f(a) + f(b);
   for (let base = 0; base < steps; base += BLOCK) {
     const end = Math.min(BLOCK, steps - base);

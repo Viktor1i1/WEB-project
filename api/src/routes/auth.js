@@ -10,7 +10,6 @@ const validCreds = (u, p) =>
   typeof u === 'string' && /^[a-zA-Z0-9_]{3,32}$/.test(u) &&
   typeof p === 'string' && p.length >= 6 && p.length <= 72;
 
-// Створення адміністратора при старті (якщо задано змінні середовища).
 export async function bootstrapAdmin() {
   const { ADMIN_USERNAME, ADMIN_PASSWORD } = process.env;
   if (!ADMIN_USERNAME || !ADMIN_PASSWORD) return;
@@ -29,7 +28,7 @@ router.post('/register', ah(async (req, res) => {
       error: 'Ім’я користувача: 3–32 символи (латинські літери, цифри, підкреслення). Пароль: щонайменше 6 символів.',
     });
   }
-  const hash = await bcrypt.hash(password, 10); // пароль зберігається лише у вигляді хешу
+  const hash = await bcrypt.hash(password, 10); 
   try {
     const { rows } = await pool.query(
       `INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, role`,
